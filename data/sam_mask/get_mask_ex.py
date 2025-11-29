@@ -53,12 +53,12 @@ def save_binary_mask(mask, output_path):
 
 
 model = LangSAM()
-image_pil = Image.open("./assets/source_0.jpg").convert("RGB") 
-text_prompt = "an iron hammer with a black handle"  # 此处需修改
+image_pil = Image.open("./assets/source_0.jpg").convert("RGB")
+text_prompt = "green basket in the middle."
 results = model.predict([image_pil], [text_prompt])
 
 masks = results[0]["masks"]
 print(masks.shape)
 assert masks.shape[0] == 1
 
-save_binary_mask(masks[0], f"assets/outputs/hammer_0.png") # 此处需修改
+save_binary_mask(masks[0], f"assets/outputs/basket_0.png")
