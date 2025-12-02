@@ -1,16 +1,20 @@
 _target_: demo_generation.demogen.DemoGen
 
-data_root: /home/lemonhdl/workspace/CycleManip/RoboTwin/policy/DP3
+data_root: data
 
-source_name: beat_block_hammer-loop1-8-all-1
+source_name: beat_block_hammer-loop1-8-all
 
 task_n_object: 2  # 根据任务实际设置,这里是一个锤子和一个积木块
 
 use_linear_interpolation: false
 interpolate_step_size: 1
 
-use_manual_parsing_frames: false  # 或 false，视你的分割方式
-parsing_frames: [0]    # 示例，按实际帧号填写
+use_manual_parsing_frames: true
+parsing_frames:
+  motion-1: 0
+  skill-1: 8
+  motion-2: 33
+  skill-2: 37
 
 mask_names:
   object: hammer

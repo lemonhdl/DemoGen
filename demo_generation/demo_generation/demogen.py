@@ -1,5 +1,8 @@
 # from re import T
 # from turtle import st
+# 强制使用 Agg 后端，解决 FigureCanvasTkAgg 无 tstring_rgb 报错
+import matplotlib
+matplotlib.use('Agg')
 from diffusion_policies.common.replay_buffer import ReplayBuffer
 # from regex import I
 # import pcd_visualizer
@@ -103,6 +106,7 @@ class DemoGen:
         mask = imageio.imread(os.path.join(self.data_root, f"sam_mask/{self.source_name}/{demo_idx}/{self.mask_names[object_or_target]}.jpg"))
         mask = mask > 128
         filtered_pcd = restore_and_filter_pcd(pcd, mask)
+        # [DEBUG] 输出已去除
         return filtered_pcd
     
     def generate_demo(self):
@@ -113,7 +117,7 @@ class DemoGen:
         else:
             raise NotImplementedError
         
-    def parse_frames_two_stage(self, pcds, demo_idx, ee_poses, distance_mode="ee2pcd", threshold_1=0.15, threshold_2=0.235, threshold_3=0.275,):
+    def parse_frames_two_stage(self, pcds, demo_idx, ee_poses, distance_mode="ee2pcd", threshold_1=0.8375, threshold_2=0.3, threshold_3=0.8376):
         """
         There are two ways to parse the frames of whole trajectory into object-centric segments: (1) Either by comparing the distance between 
             the end-effector and the object point cloud, (2) Or by manually specifying the frames when `self.use_manual_parsing_frames = True`.
@@ -123,10 +127,15 @@ class DemoGen:
             frame_idx on the left top of the video.
         """
         assert distance_mode in ["ee2pcd", "pcd2pcd"]
-        stage = 1
+        skill_1_frame = 0
+        motion_2_frame = 0
+        skill_2_frame = 0
+        stage = 1 # 1: to skill-1, 2: to motion-2, 3: to skill-2
         for i in range(pcds.shape[0]):
             object_pcd = self.get_objects_pcd_from_sam_mask(pcds[i], demo_idx, "object")
             target_pcd = self.get_objects_pcd_from_sam_mask(pcds[i], demo_idx, "target")
+            # [DEBUG] 输出已去除
+            # ...existing code...
             if stage == 1:
                 if distance_mode == "ee2pcd":            
                     if self.average_distance_to_point_cloud(ee_poses[i], object_pcd) <= threshold_1:
@@ -171,7 +180,6 @@ class DemoGen:
                     if self.chamfer_distance(ee_obj_pcd, target_pcd) <= threshold_3:
                         skill_2_frame = i
                         break
-                
         print(f"Stage 1: {skill_1_frame}, Pre-2: {motion_2_frame}, Stage 2: {skill_2_frame}")
         return skill_1_frame, motion_2_frame, skill_2_frame
 
@@ -216,7 +224,7 @@ class DemoGen:
             else:
                 ee_poses = source_demo["state"][:, :3]
                 skill_1_frame, motion_2_frame, skill_2_frame = self.parse_frames_two_stage(pcds, i, ee_poses)
-            # print(f"Skill-1: {skill_1_frame}, Motion-2: {motion_2_frame}, Skill-2: {skill_2_frame}")
+            print(f"Skill-1: {skill_1_frame}, Motion-2: {motion_2_frame}, Skill-2: {skill_2_frame}")
             
             pcd_obj = self.get_objects_pcd_from_sam_mask(pcds[0], i, "object")
             pcd_tar = self.get_objects_pcd_from_sam_mask(pcds[0], i, "target")
@@ -603,7 +611,7 @@ class DemoGen:
         cprint(f'Saved hdf5 file to {save_dir}', 'green')
 
     @staticmethod
-    def point_cloud_to_video(point_clouds, output_file, fps=15, elev=30, azim=45):
+    def point_cloud_to_video(point_clouds, output_file, fps=15, *args, **kwargs):
         """
         Converts a sequence of point cloud frames into a video.
 
@@ -611,8 +619,6 @@ class DemoGen:
             point_clouds (list): A list of (N, 6) numpy arrays representing the point clouds.
             output_file (str): The path to the output video file.
             fps (int, optional): The frames per second of the output video. Defaults to 15.
-            elev (float, optional): The elevation angle (in degrees) for the 3D view. Defaults to 30.
-            azim (float, optional): The azimuth angle (in degrees) for the 3D view. Defaults to 45.
         """
         fig = plt.figure(figsize=(8, 6), dpi=300)
         ax = fig.add_subplot(111, projection='3d')
@@ -627,38 +633,30 @@ class DemoGen:
 
         for frame, points in enumerate(point_clouds):
             ax.clear()
-            color = points[:, 3:] / 255
+            color = points[:, 3:]
             ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=color, marker='.')
 
             ax.set_box_aspect([1.6, 2.2, 1])
-            # ax.set_box_aspect([1.6, 1.6, 1])
-            # ax.set_aspect('equal')
-            ax.set_xlim(0.1, 0.8)
-            ax.set_ylim(-0.4, 0.6)
-            # ax.set_ylim(-0.3, 0.4)
-            ax.set_zlim(0.1, 0.4)
+            # 坐标轴范围与zarr可视化一致，直接用所有点的实际范围
+            ax.set_xlim(np.min(all_points[:, 0]), np.max(all_points[:, 0]))
+            ax.set_ylim(np.min(all_points[:, 1]), np.max(all_points[:, 1]))
+            ax.set_zlim(np.min(all_points[:, 2]), np.max(all_points[:, 2]))
 
-            x_ticks = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
-            y_ticks = [-0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-            # y_ticks = [-0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4]
-            z_ticks = [0.1, 0.2, 0.3, 0.4]
             ax.tick_params(axis='both', which='major', labelsize=8)
-            ax.xaxis.set_major_locator(FixedLocator(x_ticks))
-            ax.yaxis.set_major_locator(FixedLocator(y_ticks))
-            ax.zaxis.set_major_locator(FixedLocator(z_ticks))
-            
-            formatter = FormatStrFormatter('%.1f')
+            formatter = FormatStrFormatter('%.2f')
             ax.xaxis.set_major_formatter(formatter)
             ax.yaxis.set_major_formatter(formatter)
             ax.zaxis.set_major_formatter(formatter)
 
-            ax.view_init(elev=elev, azim=azim)
+            # 使用matplotlib默认视角，不设置elev和azim
+            # ax.view_init()  # 可选：如需强制默认视角可加此行
             ax.text2D(0.05, 0.95, f'Frame: {frame}', transform=ax.transAxes, fontsize=14, 
                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-            
+
             fig.canvas.draw()
-            img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+            img = img.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+            img = img[..., :3]  # 只保留RGB通道
             writer.append_data(img)
 
         writer.close()
@@ -742,7 +740,7 @@ class DemoGen:
         return average_distance
     
     @staticmethod
-    def pcd_bbox(pcd, relax=True):
+    def pcd_bbox(pcd, relax=False):
         min_vals = np.min(pcd[:, :3], axis=0)
         max_vals = np.max(pcd[:, :3], axis=0)
         if relax:
@@ -751,4 +749,3 @@ class DemoGen:
             min_vals[2] = 0.0
         return np.array([min_vals, max_vals])
 
-    
