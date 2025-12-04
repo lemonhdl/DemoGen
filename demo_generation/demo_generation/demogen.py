@@ -106,7 +106,18 @@ class DemoGen:
         mask = imageio.imread(os.path.join(self.data_root, f"sam_mask/{self.source_name}/{demo_idx}/{self.mask_names[object_or_target]}.jpg"))
         mask = mask > 128
         filtered_pcd = restore_and_filter_pcd(pcd, mask)
-        # [DEBUG] 输出已去除
+        # If filter removed all points, dump debug info for inspection and warn
+        if filtered_pcd.size == 0:
+            debug_dir = os.path.join(self.data_root, 'debug_masks', self.source_name, str(demo_idx))
+            os.makedirs(debug_dir, exist_ok=True)
+            try:
+                # save original pcd and mask for inspection
+                np.save(os.path.join(debug_dir, f"{object_or_target}_pcd_original.npy"), pcd)
+                # save mask image (as uint8) if available
+                imageio.imwrite(os.path.join(debug_dir, f"{object_or_target}_mask.png"), (mask.astype(np.uint8) * 255))
+            except Exception:
+                pass
+            cprint(f"[WARN] Filtered {object_or_target} point cloud is empty for demo {demo_idx}. Saved debug files to {debug_dir}", 'yellow')
         return filtered_pcd
     
     def generate_demo(self):
@@ -228,6 +239,11 @@ class DemoGen:
             
             pcd_obj = self.get_objects_pcd_from_sam_mask(pcds[0], i, "object")
             pcd_tar = self.get_objects_pcd_from_sam_mask(pcds[0], i, "target")
+            # If either object or target point cloud is empty after masking, skip this source demo
+            if pcd_obj is None or pcd_obj.shape[0] == 0 or pcd_tar is None or pcd_tar.shape[0] == 0:
+                cprint(f"[WARN] Skipping source demo {i} because object/target point cloud is empty after SAM mask.", 'yellow')
+                continue
+
             obj_bbox = self.pcd_bbox(pcd_obj)
             tar_bbox = self.pcd_bbox(pcd_tar)
 
@@ -652,7 +668,23 @@ class DemoGen:
         masks.append(np.logical_not(np.any(masks, axis=0)))
         for mask in masks:
             selected_pcds.append(pcd[mask])
-        assert np.sum([len(p) for p in selected_pcds]) == pcd.shape[0]
+        total_selected = np.sum([len(p) for p in selected_pcds])
+        if total_selected != pcd.shape[0]:
+            # Fallback: ensure no points are lost due to boundary conditions or boolean casting
+            cprint(f"[WARN] pcd_divide selected {total_selected} points but input has {pcd.shape[0]}. Adjusting masks to include remainder.", 'yellow')
+            # recompute masks but make them mutually exclusive: assign points to first matching bbox
+            masks = []
+            assigned = np.zeros(pcd.shape[0], dtype=bool)
+            for bbox in bbox_list:
+                mask = np.all(pcd[:, :3] > bbox[0], axis=1) & np.all(pcd[:, :3] < bbox[1], axis=1)
+                # remove already assigned points to avoid double counting
+                mask = mask & (~assigned)
+                masks.append(mask)
+                assigned |= mask
+            # remainder (points not assigned to any bbox)
+            remainder = ~assigned
+            masks.append(remainder)
+            selected_pcds = [pcd[mask] for mask in masks]
         return selected_pcds
 
     @staticmethod
