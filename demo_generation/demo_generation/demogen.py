@@ -566,49 +566,23 @@ class DemoGen:
         print(f"inensity: {vfunc(intensity)}")
 
     def save_episodes(self, generated_episodes, save_dir):
-        os.makedirs(save_dir, exist_ok=True)
-        cprint(f"Saving data to {save_dir}", "green")
-        # self.replay_buffer.save_to_store(save_dir)
-
-        zarr_root = zarr.group(save_dir)
-        zarr_data = zarr_root.create_group('data')
-        zarr_meta = zarr_root.create_group('meta')
-        state_arrays = np.concatenate([ep["state"] for ep in generated_episodes], axis=0)
-        point_cloud_arrays = np.concatenate([ep["point_cloud"] for ep in generated_episodes], axis=0)
-        action_arrays = np.concatenate([ep["action"] for ep in generated_episodes], axis=0)
-        episode_ends = []
-        count = 0
-        for ep in generated_episodes:
-            count += len(ep["state"])
-            episode_ends.append(count)
-        episode_ends_arrays = np.array(episode_ends)
-        print(episode_ends_arrays)
-
-        compressor = zarr.Blosc(cname='zstd', clevel=3, shuffle=1)
-        state_chunk_size = (100, state_arrays.shape[1])
-        point_cloud_chunk_size = (100, point_cloud_arrays.shape[1], point_cloud_arrays.shape[2])
-        action_chunk_size = (100, action_arrays.shape[1])
-        zarr_data.create_dataset('agent_pos', data=state_arrays, chunks=state_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
-        zarr_data.create_dataset('point_cloud', data=point_cloud_arrays, chunks=point_cloud_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
-        zarr_data.create_dataset('action', data=action_arrays, chunks=action_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
-        zarr_meta.create_dataset('episode_ends', data=episode_ends_arrays, dtype='int64', overwrite=True, compressor=compressor)
-
-        cprint(f'-'*50, 'cyan')
-        # print shape
-        cprint(f'point_cloud shape: {point_cloud_arrays.shape}, range: [{np.min(point_cloud_arrays)}, {np.max(point_cloud_arrays)}]', 'green')
-        cprint(f'state shape: {state_arrays.shape}, range: [{np.min(state_arrays)}, {np.max(state_arrays)}]', 'green')
-        cprint(f'action shape: {action_arrays.shape}, range: [{np.min(action_arrays)}, {np.max(action_arrays)}]', 'green')
-        cprint(f'Saved zarr file to {save_dir}', 'green')
-
-        # save to hdf5
+        # 新建子目录保存每个episode
         import h5py
-        save_dir = save_dir.replace('.zarr', '.hdf5')
-        with h5py.File(save_dir, 'w') as f:
-            f.create_dataset('agent_pos', data=state_arrays, compression='gzip')
-            f.create_dataset('point_cloud', data=point_cloud_arrays, compression='gzip')
-            f.create_dataset('action', data=action_arrays, compression='gzip')
-            f.create_dataset('episode_ends', data=episode_ends_arrays, compression='gzip')
-        cprint(f'Saved hdf5 file to {save_dir}', 'green')
+        base_dir = save_dir.replace('.zarr', '_episodes')
+        os.makedirs(base_dir, exist_ok=True)
+        cprint(f"Saving each episode to {base_dir}", "green")
+        for idx, ep in enumerate(generated_episodes):
+            ep_agent_pos = np.array(ep["state"])
+            ep_point_cloud = np.array(ep["point_cloud"])
+            ep_action = np.array(ep["action"])
+            ep_episode_ends = np.array([ep_agent_pos.shape[0]])
+            ep_path = os.path.join(base_dir, f'episode_{idx}.hdf5')
+            with h5py.File(ep_path, 'w') as f:
+                f.create_dataset('agent_pos', data=ep_agent_pos, compression='gzip')
+                f.create_dataset('point_cloud', data=ep_point_cloud, compression='gzip')
+                f.create_dataset('action', data=ep_action, compression='gzip')
+                f.create_dataset('episode_ends', data=ep_episode_ends, compression='gzip')
+            cprint(f'Saved: {ep_path}', 'cyan')
 
     @staticmethod
     def point_cloud_to_video(point_clouds, output_file, fps=15, *args, **kwargs):

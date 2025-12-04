@@ -29,8 +29,8 @@ def save_image(image_array, file_path):
     image.save(file_path)
 
 def new_func(i):
-    h5_file_path = f'/home/lemonhdl/workspace/DemoGen/data/datasets/robotwin_ori/beat_block_hammer/loop1-8-all/data/episode{i}.hdf5'
-    output_dir = f'/home/lemonhdl/workspace/DemoGen/data/sam_mask/beat_block_hammer/vis_all'
+    h5_file_path = f'/home/lemonhdl/workspace/DemoGen/data/datasets/robotwin_ori/beat_block_hammer/loop1-8-all/data/episode0.hdf5'
+    output_dir = f'/home/lemonhdl/workspace/DemoGen/data/sam_mask/beat_block_hammer-loop1-single/vis_all'
     os.makedirs(output_dir, exist_ok=True)
     save_all_rgb_frames_from_h5(h5_file_path, output_dir)
 

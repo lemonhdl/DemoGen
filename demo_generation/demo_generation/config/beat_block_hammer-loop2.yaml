@@ -2,7 +2,7 @@ _target_: demo_generation.demogen.DemoGen
 
 data_root: data
 
-source_name: beat_block_hammer-loop1-8-all
+source_name: beat_block_hammer-loop1-8-all-1-demogen-1
 
 task_n_object: 2  # 根据任务实际设置,这里是一个锤子和一个积木块
 
@@ -13,7 +13,7 @@ use_manual_parsing_frames: true
 parsing_frames:
   motion-1: 0
   skill-1: 8
-  motion-2: 33
+  motion-2: 29
   skill-2: 37
 
 mask_names:
