@@ -1,11 +1,16 @@
 # from re import T
 # from turtle import st
-from diffusion_policies.common.replay_buffer import ReplayBuffer
+from .diffusion_policies.common.replay_buffer import ReplayBuffer
 # from regex import I
 # import pcd_visualizer
 import numpy as np
 import copy
 import os
+# Backwards compatibility: some libraries call `np.product`, which
+# was removed/renamed in newer NumPy versions. Ensure `np.product`
+# exists as an alias to `np.prod` to avoid AttributeError in those libs.
+if not hasattr(np, 'product') and hasattr(np, 'prod'):
+    np.product = np.prod
 import zarr
 from termcolor import cprint
 from demo_generation.mask_util import restore_and_filter_pcd
@@ -657,8 +662,23 @@ class DemoGen:
                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
             
             fig.canvas.draw()
-            img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            try:
+                # Preferred method on many backends
+                img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            except AttributeError:
+                # Fallback for backends where `tostring_rgb` is not available
+                # `buffer_rgba` returns an array-like RGBA buffer; convert to RGB
+                buf = fig.canvas.buffer_rgba()
+                arr = np.asarray(buf)
+                # If buffer_rgba returned a flat bytes-like, reshape accordingly
+                if arr.ndim == 1:
+                    arr = arr.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+                # Keep only RGB channels
+                if arr.shape[2] == 4:
+                    img = arr[:, :, :3].astype(np.uint8)
+                else:
+                    img = arr.astype(np.uint8)
             writer.append_data(img)
 
         writer.close()
