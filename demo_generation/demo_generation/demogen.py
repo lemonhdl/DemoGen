@@ -43,15 +43,113 @@ class DemoGen:
             cprint("[NOTE] Rendering video is enabled. It takes ~10s to render a single generated trajectory.", "yellow")
         self.gen_mode = cfg.generation.mode
 
-        source_zarr = os.path.join(self.data_root, "datasets", "source", self.source_name + ".zarr")
+        source_dir = os.path.join(self.data_root, "datasets", "source")
+        source_zarr = os.path.join(source_dir, self.source_name + ".zarr")
+        # If exact path does not exist, try to fuzzy-match available zarr directories
+        if not os.path.exists(source_zarr):
+            try:
+                candidates = [d for d in os.listdir(source_dir) if self.source_name in d]
+            except Exception:
+                candidates = []
+            if len(candidates) == 1:
+                matched = candidates[0]
+                source_zarr = os.path.join(source_dir, matched)
+                cprint(f"[INFO] source zarr not found at expected path. Using fuzzy match: {matched}", 'yellow')
+            elif len(candidates) > 1:
+                cprint(f"[ERROR] Multiple candidate zarrs found for source_name '{self.source_name}': {candidates}", 'red')
+                raise FileNotFoundError(f"Multiple candidate zarrs found for source_name '{self.source_name}': {candidates}")
+            else:
+                cprint(f"[ERROR] Source zarr not found: {source_zarr}", 'red')
+                # 如果是交互式 shell，让用户输入一个 HDF5 或 zarr 的绝对路径
+                try:
+                    import sys
+                    if sys.stdin.isatty():
+                        user_path = input('未找到 source zarr。请输入 HDF5 (.h5/.hdf5) 或 zarr 目录的绝对路径，或直接回车放弃：').strip()
+                        if not user_path:
+                            raise FileNotFoundError(f"Source zarr not found: {source_zarr}")
+                        if not os.path.exists(user_path):
+                            cprint(f"[ERROR] 指定路径不存在: {user_path}", 'red')
+                            raise FileNotFoundError(f"Specified path does not exist: {user_path}")
+                        source_zarr = user_path
+                    else:
+                        raise FileNotFoundError(f"Source zarr not found: {source_zarr}")
+                except KeyboardInterrupt:
+                    raise FileNotFoundError(f"Source zarr not found: {source_zarr}")
+
         self._load_from_zarr(source_zarr)
 
     def _load_from_zarr(self, zarr_path):
         cprint(f"Loading data from {zarr_path}", "blue")
-        self.replay_buffer = ReplayBuffer.copy_from_path(
-            zarr_path, keys=['state', 'action', 'point_cloud'])
+        # Support both zarr and hdf5 files. If path ends with .hdf5 or .h5,
+        # read HDF5 and construct an in-memory ReplayBuffer-compatible dict.
+        if str(zarr_path).endswith('.hdf5') or str(zarr_path).endswith('.h5'):
+            try:
+                import h5py
+            except Exception:
+                raise RuntimeError('h5py is required to load .hdf5 files. Please install h5py in your environment.')
+            with h5py.File(os.path.expanduser(zarr_path), 'r') as f:
+                # Try multiple common names used across datasets/collectors
+                def _read_first(keys):
+                    for k in keys:
+                        if k in f:
+                            try:
+                                return f[k][:]
+                            except Exception:
+                                return None
+                    return None
+
+                # state can be 'agent_pos', 'state', or 'endpose'
+                state = _read_first(['agent_pos', 'state', 'endpose'])
+                if state is None:
+                    raise KeyError('HDF5 file missing "agent_pos" or "state" or "endpose" dataset')
+
+                # action can be 'action' or 'joint_action/vector'
+                action = _read_first(['action', 'joint_action/vector', 'joint_action/vector'])
+                if action is None:
+                    # try to reconstruct an action if left/right arms exist
+                    if 'joint_action' in f and isinstance(f['joint_action'], h5py.Group):
+                        # try to concatenate available sub-datasets
+                        parts = []
+                        for name in ['left_arm', 'left_gripper', 'right_arm', 'right_gripper', 'vector']:
+                            if f['joint_action'].get(name) is not None:
+                                parts.append(f['joint_action'][name][:])
+                        if parts:
+                            try:
+                                action = np.concatenate(parts, axis=-1)
+                            except Exception:
+                                action = None
+                if action is None:
+                    raise KeyError('HDF5 file missing "action" or "joint_action/vector" dataset')
+
+                # point cloud dataset names
+                point_cloud = _read_first(['point_cloud', 'pointcloud', 'pointCloud'])
+                if point_cloud is None:
+                    raise KeyError('HDF5 file missing "point_cloud" or "pointcloud" dataset')
+
+                if 'episode_ends' in f:
+                    episode_ends = f['episode_ends'][:]
+                else:
+                    # fallback: single episode covering entire length
+                    episode_ends = np.array([state.shape[0]], dtype=np.int64)
+
+                root = {
+                    'meta': {
+                        'episode_ends': episode_ends
+                    },
+                    'data': {
+                        'state': state,
+                        'action': action,
+                        'point_cloud': point_cloud
+                    }
+                }
+                self.replay_buffer = ReplayBuffer(root=root)
+        else:
+            # assume zarr
+            self.replay_buffer = ReplayBuffer.copy_from_path(
+                zarr_path, keys=['state', 'action', 'point_cloud'])
+
         self.n_source_episodes = self.replay_buffer.n_episodes
-        self.demo_name = zarr_path.split("/")[-1].split(".")[0]
+        self.demo_name = os.path.basename(zarr_path).split(".")[0]
     
     def generate_trans_vectors(self, trans_range, n_demos, mode="random"):
         """
@@ -582,22 +680,87 @@ class DemoGen:
         print(f"inensity: {vfunc(intensity)}")
 
     def save_episodes(self, generated_episodes, save_dir):
-        # 新建子目录保存每个episode
+        # Save each generated episode using HDF5 layout compatible with source data
         import h5py
         base_dir = save_dir.replace('.zarr', '_episodes')
         os.makedirs(base_dir, exist_ok=True)
         cprint(f"Saving each episode to {base_dir}", "green")
-        for idx, ep in enumerate(generated_episodes):
-            ep_agent_pos = np.array(ep["state"])
-            ep_point_cloud = np.array(ep["point_cloud"])
-            ep_action = np.array(ep["action"])
-            ep_episode_ends = np.array([ep_agent_pos.shape[0]])
-            ep_path = os.path.join(base_dir, f'episode_{idx}.hdf5')
+        # determine starting index by scanning existing files (so numbering is continuous)
+        import glob
+        existing = glob.glob(os.path.join(base_dir, 'episode*.hdf5'))
+        start_idx = 0
+        if existing:
+            # parse existing indices like 'episode4.hdf5' or 'episode_4.hdf5' and continue after the max
+            try:
+                import re
+                nums = []
+                for p in existing:
+                    m = re.search(r'episode(?:_)?(\d+)\.hdf5$', os.path.basename(p))
+                    if m:
+                        nums.append(int(m.group(1)))
+                if nums:
+                    start_idx = max(nums) + 1
+                else:
+                    start_idx = len(existing)
+            except Exception:
+                start_idx = len(existing)
+
+        for rel_idx, ep in enumerate(generated_episodes):
+            idx = start_idx + rel_idx
+            ep_agent_pos = np.array(ep["state"])  # shape: (T, state_dim)
+            ep_point_cloud = np.array(ep["point_cloud"])  # shape: (T, N, 6)
+            ep_action = np.array(ep["action"])  # shape: (T, action_dim)
+            T = ep_agent_pos.shape[0]
+            ep_episode_ends = np.array([T])
+            ep_path = os.path.join(base_dir, f'episode{idx}.hdf5')
+
+            # Create HDF5 with keys similar to source collector
             with h5py.File(ep_path, 'w') as f:
-                f.create_dataset('agent_pos', data=ep_agent_pos, compression='gzip')
-                f.create_dataset('point_cloud', data=ep_point_cloud, compression='gzip')
-                f.create_dataset('action', data=ep_action, compression='gzip')
+                # endpose / state
+                f.create_dataset('endpose', data=ep_agent_pos, compression='gzip')
+
+                # joint_action group: prefer storing 'vector' to match source
+                ja_grp = f.create_group('joint_action')
+                try:
+                    ja_grp.create_dataset('vector', data=ep_action, compression='gzip')
+                except Exception:
+                    # fallback: store as plain dataset under joint_action
+                    f.create_dataset('joint_action', data=ep_action, compression='gzip')
+
+                # loop_counter and loop_times
+                loop_counter = np.arange(T, dtype=np.int64)
+                f.create_dataset('loop_counter', data=loop_counter, compression='gzip')
+                f.create_dataset('loop_times', data=np.array(T, dtype=np.int32))
+
+                # object_pos: placeholder (shape T x 7)
+                obj_grp = f.create_group('object_pos')
+                obj_grp.create_dataset('obj0', data=np.zeros((T, 7), dtype=np.float32), compression='gzip')
+
+                # observation group placeholders for head/left/right cameras
+                obs_grp = f.create_group('observation')
+                for cam in ['head_camera', 'left_camera', 'right_camera']:
+                    cg = obs_grp.create_group(cam)
+                    # cam2world_gl: (T,4,4)
+                    cg.create_dataset('cam2world_gl', data=np.zeros((T, 4, 4), dtype=np.float32), compression='gzip')
+                    # depth: placeholder (T, H, W) use (240,320) as in source if available
+                    try:
+                        cg.create_dataset('depth', data=np.zeros((T, 240, 320), dtype=np.float64), compression='gzip')
+                    except Exception:
+                        # in case too large, create a tiny placeholder
+                        cg.create_dataset('depth', data=np.zeros((T, 4, 4), dtype=np.float64), compression='gzip')
+                    cg.create_dataset('extrinsic_cv', data=np.zeros((T, 3, 4), dtype=np.float32), compression='gzip')
+                    cg.create_dataset('intrinsic_cv', data=np.zeros((T, 3, 3), dtype=np.float32), compression='gzip')
+                    # rgb: store empty bytes per-frame as placeholder
+                    dt = h5py.string_dtype(encoding='utf-8')
+                    rgb_ds = cg.create_dataset('rgb', shape=(T,), dtype=dt)
+                    rgb_ds[:] = ['' for _ in range(T)]
+
+                # pointcloud: name matches source ('pointcloud') and shape (T, N, 6)
+                f.create_dataset('pointcloud', data=ep_point_cloud.astype(np.float32), compression='gzip')
+
+                # episode_ends
                 f.create_dataset('episode_ends', data=ep_episode_ends, compression='gzip')
+
             cprint(f'Saved: {ep_path}', 'cyan')
 
     @staticmethod

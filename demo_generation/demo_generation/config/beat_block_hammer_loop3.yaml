@@ -1,0 +1,49 @@
+_target_: demo_generation.demogen.DemoGen
+
+data_root: data
+
+source_name: beat_block_hammer_loop3
+
+task_n_object: 2  # 根据任务实际设置,这里是一个锤子和一个积木块
+
+use_linear_interpolation: false
+interpolate_step_size: 1
+
+use_manual_parsing_frames: true
+parsing_frames:
+  motion-1: 0
+  skill-1: 8
+  motion-2: 25
+  skill-2: 37
+
+mask_names:
+  object: hammer
+  target: block
+
+trans_range:
+  src:
+    object: [[0, 0, 0], [0, 0, 0]]
+    target: [[0, 0, 0], [0, 0, 0]]
+  test:
+    object: [[-0.10, -0.10, 0], [0.10, 0.10, 0]]
+    target: [[-0.10, -0.10, 0], [0.10, 0.10, 0]]
+
+generation:
+  range_name: test
+  n_gen_per_source: 16
+  render_video: True
+  mode: grid
+
+# range_name 除了设置为 src，还可以设置为你自定义的标签，比如：
+
+# train：用于训练集的空间分布
+# test：用于测试集的空间分布
+# generalize、extrapolate：用于泛化或外推分布
+# custom1、custom2：任意自定义标签
+# 只要你在 trans_range 下定义了对应标签（如 trans_range.train），就可以在 range_name 里切换，实现不同空间分布的数据合成。例如：
+# range_name: test
+# trans_range:
+#   src: ...
+#   test:
+#     object: [[0.2, 0.2, 0], [0.3, 0.3, 0]]
+#     target: [[0.2, 0.2, 0], [0.3, 0.3, 0]]
